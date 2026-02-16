@@ -193,11 +193,27 @@ ensure_repo() {
     ok "Repository ready: $INSTALL_DIR"
 }
 
-# ── Install pip dependencies ───────────────────────────────────────────────
-install_pip_deps() {
-    info "Installing Python dependencies..."
-    "$PYTHON_PATH" -m pip install --quiet -r "$INSTALL_DIR/requirements.txt"
-    ok "pip dependencies installed"
+# ── Create venv and install dependencies ──────────────────────────────────
+# Uses uv if available (fast, handles PEP 668), falls back to stdlib venv + pip.
+# After this, PYTHON_PATH points to the venv's python.
+install_deps() {
+    local venv_dir="$INSTALL_DIR/.venv"
+
+    if command -v uv &>/dev/null; then
+        info "Creating venv with uv..."
+        uv venv --quiet --python "$PYTHON_PATH" "$venv_dir"
+        info "Installing Python dependencies with uv..."
+        uv pip install --quiet --python "$venv_dir/bin/python" -r "$INSTALL_DIR/requirements.txt"
+    else
+        info "Creating venv..."
+        "$PYTHON_PATH" -m venv "$venv_dir"
+        info "Installing Python dependencies..."
+        "$venv_dir/bin/python" -m pip install --quiet -r "$INSTALL_DIR/requirements.txt"
+    fi
+
+    # All config output uses the venv python so MCP clients launch with deps available
+    PYTHON_PATH="$venv_dir/bin/python"
+    ok "venv ready: $venv_dir"
 }
 
 # ── Detect MCP clients ────────────────────────────────────────────────────
@@ -373,7 +389,7 @@ main() {
     ensure_adb
     ensure_scrcpy
     find_python
-    install_pip_deps
+    install_deps
     resolve_paths
     generate_env
 
