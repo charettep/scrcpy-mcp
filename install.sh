@@ -392,6 +392,161 @@ TOMLEOF
     ok "Injected scrcpy server into $codex_toml"
 }
 
+# ── Android device setup wizard (Linux only) ─────────────────────────────
+# Guides the user through first-time USB debugging setup, polls for device
+# authorization, auto-detects USB vendor ID, and writes a udev rule.
+setup_android_device() {
+    # Skip on macOS — no udev needed
+    if [ "$(uname -s)" != "Linux" ]; then return; fi
+
+    echo ""
+    echo "── Android Device Setup ────────────────────────"
+    echo ""
+    local ans=""
+    prompt ans "  Set up an Android device now? [y/N] "
+    case "$ans" in
+        [yY]|[yY][eE][sS]) ;;
+        *) info "Skipping device setup. You can re-run install.sh later."; return ;;
+    esac
+
+    # Ensure adb is on PATH for this session (in case we just installed it)
+    export PATH="/usr/local/bin:$PATH"
+    hash -r 2>/dev/null
+
+    # Start adb daemon
+    info "Starting adb daemon..."
+    adb start-server 2>/dev/null
+
+    echo ""
+    echo "  Follow these steps on your Android device:"
+    echo ""
+    echo "  1. Plug your Android device into a USB port"
+    echo "  2. Enable Developer Options:"
+    echo "     Settings > About Phone > tap Build Number 7 times quickly"
+    echo "  3. Enable USB Debugging:"
+    echo "     Settings > System > Developer Options > toggle USB Debugging"
+    echo "  4. Accept the RSA fingerprint prompt on the phone when asked"
+    echo ""
+
+    # ── Poll for device connection ────────────────────────────────────────
+    info "Waiting for device to appear on USB..."
+    local device_line="" serial="" state="" attempts=0 max_attempts=60
+
+    while [ $attempts -lt $max_attempts ]; do
+        device_line="$(adb devices 2>/dev/null | grep -E '\s(device|unauthorized|no permissions)' | head -1)"
+        if [ -n "$device_line" ]; then
+            serial="$(echo "$device_line" | awk '{print $1}')"
+            state="$(echo "$device_line" | awk '{print $2}')"
+            break
+        fi
+        sleep 2
+        attempts=$((attempts + 1))
+        # Print a dot every 10 seconds so user knows we're still waiting
+        if [ $((attempts % 5)) -eq 0 ]; then
+            echo -ne "  ... still waiting (${attempts}/${max_attempts})\r"
+        fi
+    done
+
+    if [ -z "$serial" ]; then
+        warn "No device detected after 2 minutes. Skipping device setup."
+        info "Plug in your device and run: adb devices"
+        return
+    fi
+
+    ok "Device detected: $serial (state: $state)"
+
+    # ── Wait for authorization if needed ──────────────────────────────────
+    if [ "$state" = "unauthorized" ] || [ "$state" = "no" ]; then
+        echo ""
+        info "Device is connected but not authorized."
+        info "Accept the RSA fingerprint prompt on your phone now..."
+        echo ""
+
+        attempts=0
+        while [ $attempts -lt 30 ]; do
+            state="$(adb devices 2>/dev/null | grep "$serial" | awk '{print $2}')"
+            if [ "$state" = "device" ]; then
+                break
+            fi
+            sleep 2
+            attempts=$((attempts + 1))
+        done
+
+        if [ "$state" != "device" ]; then
+            warn "Device still unauthorized after 60s. Skipping udev rule."
+            info "Accept the RSA prompt and run: adb devices"
+            return
+        fi
+        ok "Device authorized!"
+    fi
+
+    # ── Auto-detect USB vendor ID and write udev rule ─────────────────────
+    info "Detecting USB vendor ID..."
+    local vendor_id=""
+
+    # Try to get vendor ID from adb usb device path
+    # lsusb lists all USB devices; we look for known Android vendor IDs
+    # or match the device serial against usb-devices output
+    if command -v lsusb &>/dev/null; then
+        # Get the device's USB vendor ID via adb and cross-reference with lsusb
+        # adb devices -l shows transport_id; we can also use getprop
+        local usb_vid
+        usb_vid="$(adb -s "$serial" shell getprop ro.boot.usb.vid 2>/dev/null | tr -d '[:space:]')"
+
+        if [ -z "$usb_vid" ] || [ "$usb_vid" = "" ]; then
+            # Fallback: scan lsusb for known Android vendors or recently added devices
+            # Get manufacturer from device, match against lsusb
+            local manufacturer
+            manufacturer="$(adb -s "$serial" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+
+            if [ -n "$manufacturer" ]; then
+                vendor_id="$(lsusb | grep -i "$manufacturer" | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
+            fi
+        else
+            vendor_id="$usb_vid"
+        fi
+
+        # Last resort: show lsusb and let the user see what we picked
+        if [ -z "$vendor_id" ]; then
+            # Parse all lsusb vendor IDs and exclude common non-Android ones (hubs, etc.)
+            # Pick the first one that's not a Linux Foundation hub (1d6b)
+            vendor_id="$(lsusb | grep -v '1d6b:' | grep -v 'Hub' | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
+        fi
+    fi
+
+    if [ -z "$vendor_id" ]; then
+        warn "Could not auto-detect USB vendor ID."
+        info "Run 'lsusb' to find your device's vendor ID, then create:"
+        info "  /etc/udev/rules.d/51-android.rules"
+        return
+    fi
+
+    ok "USB vendor ID: $vendor_id"
+
+    # Check if rule already exists
+    if grep -qs "idVendor.*$vendor_id" /etc/udev/rules.d/51-android.rules 2>/dev/null; then
+        ok "udev rule for vendor $vendor_id already exists"
+    else
+        info "Adding udev rule for vendor $vendor_id..."
+        sudo tee /etc/udev/rules.d/51-android.rules >/dev/null <<UDEVEOF
+SUBSYSTEM=="usb", ATTR{idVendor}=="$vendor_id", MODE="0666", GROUP="plugdev"
+UDEVEOF
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger
+        ok "udev rule written to /etc/udev/rules.d/51-android.rules"
+    fi
+
+    # Restart adb to pick up new permissions
+    info "Restarting adb server..."
+    adb kill-server
+    adb start-server
+    echo ""
+    info "Connected devices:"
+    adb devices -l
+    echo ""
+    ok "Android device setup complete!"
+}
+
 # ── Generate .env ─────────────────────────────────────────────────────────
 generate_env() {
     local env_file="$INSTALL_DIR/.env"
@@ -414,6 +569,9 @@ main() {
     detect_platform
     ensure_repo
     ensure_scrcpy_and_adb
+    # Refresh PATH so newly symlinked binaries are found immediately
+    export PATH="/usr/local/bin:$PATH"
+    hash -r 2>/dev/null
     find_python
     ensure_uv
     install_deps
@@ -431,6 +589,8 @@ main() {
     else
         generate_mcp_json
     fi
+
+    setup_android_device
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
