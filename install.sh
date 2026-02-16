@@ -97,53 +97,76 @@ ensure_git() {
     fi
 }
 
-# ── Check / install adb ───────────────────────────────────────────────────
+# ── Check / install adb (Google Platform Tools) ──────────────────────────
 ensure_adb() {
     if command -v adb &>/dev/null; then
         ok "adb found: $(command -v adb)"
         return
     fi
-    local pkg
-    case "$PLATFORM" in
-        apt)    pkg="adb" ;;
-        dnf)    pkg="android-tools" ;;
-        pacman) pkg="android-tools" ;;
-        brew)   pkg="android-platform-tools" ;;
-    esac
-    if ask_install "adb" "$PLATFORM ($pkg)"; then
-        do_install "$pkg"
-        command -v adb &>/dev/null || fail "adb still not found after install"
-        ok "adb installed: $(command -v adb)"
-    else
+    if ! ask_install "adb" "Google Platform Tools (direct download)"; then
         fail "adb is required. Install it manually and re-run."
     fi
+
+    local os_name zip_url
+    case "$(uname -s)" in
+        Linux)  os_name="linux" ;;
+        Darwin) os_name="darwin" ;;
+        *)      fail "Unsupported OS for platform-tools download" ;;
+    esac
+    zip_url="https://dl.google.com/android/repository/platform-tools-latest-${os_name}.zip"
+
+    info "Downloading Android Platform Tools..."
+    local tmp_zip="/tmp/platform-tools-$$.zip"
+    curl -fsSL -o "$tmp_zip" "$zip_url"
+    sudo mkdir -p /opt/platform-tools
+    sudo unzip -qo "$tmp_zip" -d /opt/platform-tools
+    rm -f "$tmp_zip"
+    sudo ln -sf /opt/platform-tools/platform-tools/adb /usr/local/bin/adb
+    sudo ln -sf /opt/platform-tools/platform-tools/fastboot /usr/local/bin/fastboot
+
+    command -v adb &>/dev/null || fail "adb still not found after install"
+    ok "adb installed: $(command -v adb) ($(adb --version | head -1))"
 }
 
-# ── Check / install scrcpy ────────────────────────────────────────────────
+# ── Check / install scrcpy (GitHub release) ──────────────────────────────
 ensure_scrcpy() {
     if command -v scrcpy &>/dev/null; then
         ok "scrcpy found: $(command -v scrcpy)"
         return
     fi
-    local pkg="scrcpy"
-    local mgr="$PLATFORM ($pkg)"
-    # On apt-based systems, snap is a fallback if the apt package is unavailable
-    if [ "$PLATFORM" = "apt" ] && ! apt-cache show scrcpy &>/dev/null 2>&1; then
-        if command -v snap &>/dev/null; then
-            mgr="snap"
-        fi
-    fi
-    if ask_install "scrcpy" "$mgr"; then
-        if [ "$mgr" = "snap" ]; then
-            sudo snap install scrcpy
-        else
-            do_install "$pkg"
-        fi
-        command -v scrcpy &>/dev/null || fail "scrcpy still not found after install"
-        ok "scrcpy installed: $(command -v scrcpy)"
-    else
+    if ! ask_install "scrcpy" "GitHub release (latest)"; then
         warn "scrcpy not installed — mirroring tools won't work, but adb tools will."
+        return
     fi
+
+    # Determine asset name for this platform
+    local os_arch=""
+    case "$(uname -s)-$(uname -m)" in
+        Linux-x86_64)  os_arch="linux-x86_64" ;;
+        Darwin-arm64)  os_arch="macos-aarch64" ;;
+        Darwin-x86_64) os_arch="macos-x86_64" ;;
+        *) fail "No pre-built scrcpy binary for $(uname -s)-$(uname -m)" ;;
+    esac
+
+    # Get latest release tag from GitHub API
+    info "Fetching latest scrcpy release..."
+    local tag
+    tag="$(curl -fsSL https://api.github.com/repos/Genymobile/scrcpy/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)"
+    [ -n "$tag" ] || fail "Could not determine latest scrcpy version"
+
+    local tarball="scrcpy-${os_arch}-${tag}.tar.gz"
+    local url="https://github.com/Genymobile/scrcpy/releases/download/${tag}/${tarball}"
+
+    info "Downloading scrcpy ${tag}..."
+    local tmp_tar="/tmp/scrcpy-$$.tar.gz"
+    curl -fsSL -o "$tmp_tar" "$url"
+    sudo mkdir -p /opt/scrcpy
+    sudo tar xzf "$tmp_tar" -C /opt/scrcpy --strip-components=1
+    rm -f "$tmp_tar"
+    sudo ln -sf /opt/scrcpy/scrcpy /usr/local/bin/scrcpy
+
+    command -v scrcpy &>/dev/null || fail "scrcpy still not found after install"
+    ok "scrcpy installed: $(command -v scrcpy) (${tag})"
 }
 
 # ── Find Python 3.10+ ─────────────────────────────────────────────────────
