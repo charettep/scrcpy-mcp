@@ -13,6 +13,10 @@ from fastmcp import FastMCP
 
 mcp = FastMCP("scrcpy")
 
+# ── Configurable binary paths (set by install.sh via .mcp.json env block) ──
+ADB = os.environ.get("SCRCPY_MCP_ADB_PATH", "adb")
+SCRCPY = os.environ.get("SCRCPY_MCP_SCRCPY_PATH", "scrcpy")
+
 # ── Active scrcpy session tracking ──────────────────────────────────────────
 
 _sessions: dict[int, dict] = {}  # pid -> {process, serial, started, opts}
@@ -30,7 +34,7 @@ async def _adb(
     Uses asyncio.create_subprocess_exec (not shell) to avoid injection.
     All arguments are passed as a list, never through a shell.
     """
-    cmd = ["adb"]
+    cmd = [ADB]
     if serial:
         cmd += ["-s", serial]
     cmd += list(args)
@@ -295,7 +299,7 @@ async def scrcpy_screenshot(
         output_path = f"/tmp/scrcpy_screenshot_{int(time.time())}.png"
     output_path = os.path.expanduser(output_path)
 
-    cmd = ["adb"]
+    cmd = [ADB]
     if serial:
         cmd += ["-s", serial]
     cmd += ["exec-out", "screencap", "-p"]
@@ -390,7 +394,7 @@ async def scrcpy_screen_record(
     duration = min(max(duration, 1), 180)
     remote_path = f"/sdcard/scrcpy_record_{int(time.time())}.mp4"
 
-    cmd = ["adb"]
+    cmd = [ADB]
     if serial:
         cmd += ["-s", serial]
     cmd += ["shell", "screenrecord", "--time-limit", str(duration), remote_path]
@@ -653,7 +657,7 @@ async def scrcpy_start_mirror(
         time_limit: Stop after N seconds (0 = no limit).
         extra_args: Additional scrcpy CLI arguments as a string.
     """
-    cmd = ["scrcpy"]
+    cmd = [SCRCPY]
 
     if serial:
         cmd += ["-s", serial]

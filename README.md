@@ -1,43 +1,56 @@
 # scrcpy MCP Server
 
-Local MCP server that exposes scrcpy and ADB features as tools for MCP clients like Claude Code.
+Local MCP server that exposes Android device control via `adb` and `scrcpy` as 22 tools for MCP clients like Claude Code and Codex CLI.
+
+## Quick Start
+
+```bash
+git clone <repo-url> && cd scrcpy/mcp
+./install.sh
+```
+
+The installer will:
+1. Detect your OS and package manager (apt, dnf, pacman, brew)
+2. Check for `adb` and `scrcpy` — offer to install if missing (prompts before sudo)
+3. Find Python 3.10+ and install pip dependencies
+4. Detect installed MCP clients (Claude Code, Codex CLI)
+5. Ask where to register the server:
+   - **Global** — injects config directly into `~/.claude.json` and/or `~/.codex/config.toml`
+   - **Project** — generates a local `.mcp.json` file
 
 ## Prerequisites
 
 - Python 3.10+
-- `adb` in PATH (from Android SDK platform-tools)
-- `scrcpy` in PATH (for mirroring/recording sessions)
+- `adb` (from Android SDK platform-tools)
+- `scrcpy` (for mirroring/recording sessions)
 - An Android device with USB debugging enabled
 
-## Install
+## Manual Install
+
+If you prefer not to use the installer:
 
 ```bash
-cd /home/p/Desktop/scrcpy/mcp
 pip install -r requirements.txt
 ```
 
-Or with uv:
-
-```bash
-uv pip install -r requirements.txt
-```
-
-## Configure for Claude Code
-
-Add to your project `.mcp.json`:
+Then add to your project `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "scrcpy": {
       "command": "python3",
-      "args": ["/home/p/Desktop/scrcpy/mcp/scrcpy_mcp.py"]
+      "args": ["/absolute/path/to/scrcpy_mcp.py"],
+      "env": {
+        "SCRCPY_MCP_ADB_PATH": "/usr/bin/adb",
+        "SCRCPY_MCP_SCRCPY_PATH": "/usr/bin/scrcpy"
+      }
     }
   }
 }
 ```
 
-Or add to `~/.claude.json` for global access.
+The `env` block is optional — without it, `adb` and `scrcpy` are resolved from PATH.
 
 ## Available Tools (22)
 
@@ -99,8 +112,18 @@ All tools accept an optional `serial` parameter. If omitted, adb uses the only c
 scrcpy_tap(x=500, y=1000, serial="ABCD1234")
 ```
 
-## Test
+## Environment Variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `SCRCPY_MCP_ADB_PATH` | Absolute path to `adb` binary | `adb` (from PATH) |
+| `SCRCPY_MCP_SCRCPY_PATH` | Absolute path to `scrcpy` binary | `scrcpy` (from PATH) |
+
+These are set automatically by `install.sh` via the MCP config `env` block.
+
+## Verify
 
 ```bash
 python3 scrcpy_mcp.py  # starts on stdio
+python3 -c "from scrcpy_mcp import mcp; print(len(mcp._tool_manager._tools))"  # should print 22
 ```
