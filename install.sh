@@ -461,42 +461,29 @@ setup_android_device() {
 
     ok "Device detected: $serial (state: $state)"
 
-    # ── Auto-detect USB vendor ID via lsusb + adb usb port ────────────────
-    # We detect vendor ID BEFORE waiting for authorization because the device
-    # may be in "no permissions" state where adb shell doesn't work, but
-    # lsusb can still see the USB device.
+    # ── Auto-detect USB vendor ID via sysfs (exact) ─────────────────────────
+    # adb devices -l shows "usb:3-2" — this maps directly to the sysfs path
+    # /sys/bus/usb/devices/3-2/idVendor, giving us the exact vendor ID with
+    # no guessing or heuristics needed.
     info "Detecting USB vendor ID..."
     local vendor_id=""
 
-    if command -v lsusb &>/dev/null; then
-        # adb devices -l shows usb port like "usb:3-2" — extract bus and device
-        local usb_port
-        usb_port="$(adb devices -l 2>/dev/null | grep "$serial" | grep -oP 'usb:\K[0-9-]+' || true)"
-
-        if [ -n "$usb_port" ]; then
-            # usb_port is like "3-2" — bus is the first number
-            local bus_num="${usb_port%%-*}"
-            # lsusb shows "Bus 003 Device 042: ID 18d1:4ee7 Google Inc. ..."
-            # Match on bus number and find device with matching port
-            # Use lsusb -t (tree) to find device number from port, or just match bus
-            local bus_padded
-            bus_padded="$(printf '%03d' "$bus_num")"
-            # Get all devices on this bus, exclude hubs
-            vendor_id="$(lsusb | grep "Bus ${bus_padded}" | grep -v '1d6b:' | grep -v -i 'hub' | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
+    # Method 1: sysfs — exact match via USB port path
+    local usb_port
+    usb_port="$(adb devices -l 2>/dev/null | grep "$serial" | grep -oP 'usb:\K[0-9.-]+' || true)"
+    if [ -n "$usb_port" ]; then
+        local sysfs_path="/sys/bus/usb/devices/${usb_port}/idVendor"
+        if [ -f "$sysfs_path" ]; then
+            vendor_id="$(cat "$sysfs_path" | tr -d '[:space:]')"
         fi
+    fi
 
-        # Fallback: if adb shell works, try manufacturer match
-        if [ -z "$vendor_id" ]; then
-            local manufacturer
-            manufacturer="$(adb -s "$serial" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
-            if [ -n "$manufacturer" ]; then
-                vendor_id="$(lsusb | grep -i "$manufacturer" | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
-            fi
-        fi
-
-        # Last resort: first non-hub USB device
-        if [ -z "$vendor_id" ]; then
-            vendor_id="$(lsusb | grep -v '1d6b:' | grep -v -i 'hub' | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
+    # Method 2: adb shell getprop (only works if device is authorized)
+    if [ -z "$vendor_id" ]; then
+        local manufacturer
+        manufacturer="$(adb -s "$serial" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
+        if [ -n "$manufacturer" ] && command -v lsusb &>/dev/null; then
+            vendor_id="$(lsusb | grep -i "$manufacturer" | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
         fi
     fi
 
