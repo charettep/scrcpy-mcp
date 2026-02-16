@@ -97,44 +97,33 @@ ensure_git() {
     fi
 }
 
-# ── Check / install adb (Google Platform Tools) ──────────────────────────
-ensure_adb() {
-    if command -v adb &>/dev/null; then
-        ok "adb found: $(command -v adb)"
-        return
-    fi
-    if ! ask_install "adb" "Google Platform Tools (direct download)"; then
-        fail "adb is required. Install it manually and re-run."
-    fi
+# ── Check / install scrcpy + adb (GitHub release bundles both) ────────────
+ensure_scrcpy_and_adb() {
+    local need_scrcpy=false need_adb=false
 
-    local os_name zip_url
-    case "$(uname -s)" in
-        Linux)  os_name="linux" ;;
-        Darwin) os_name="darwin" ;;
-        *)      fail "Unsupported OS for platform-tools download" ;;
-    esac
-    zip_url="https://dl.google.com/android/repository/platform-tools-latest-${os_name}.zip"
-
-    info "Downloading Android Platform Tools..."
-    local tmp_zip="/tmp/platform-tools-$$.zip"
-    curl -fsSL -o "$tmp_zip" "$zip_url"
-    sudo mkdir -p /opt/platform-tools
-    sudo unzip -qo "$tmp_zip" -d /opt/platform-tools
-    rm -f "$tmp_zip"
-    sudo ln -sf /opt/platform-tools/platform-tools/adb /usr/local/bin/adb
-    sudo ln -sf /opt/platform-tools/platform-tools/fastboot /usr/local/bin/fastboot
-
-    command -v adb &>/dev/null || fail "adb still not found after install"
-    ok "adb installed: $(command -v adb) ($(adb --version | head -1))"
-}
-
-# ── Check / install scrcpy (GitHub release) ──────────────────────────────
-ensure_scrcpy() {
     if command -v scrcpy &>/dev/null; then
         ok "scrcpy found: $(command -v scrcpy)"
-        return
+    else
+        need_scrcpy=true
     fi
-    if ! ask_install "scrcpy" "GitHub release (latest)"; then
+
+    if command -v adb &>/dev/null; then
+        ok "adb found: $(command -v adb)"
+    else
+        need_adb=true
+    fi
+
+    # Nothing to do if both exist
+    if ! $need_scrcpy && ! $need_adb; then return; fi
+
+    local missing=""
+    if $need_scrcpy && $need_adb; then missing="scrcpy + adb"
+    elif $need_scrcpy; then missing="scrcpy"
+    else missing="adb"
+    fi
+
+    if ! ask_install "$missing" "scrcpy GitHub release (latest)"; then
+        if $need_adb; then fail "adb is required. Install it manually and re-run."; fi
         warn "scrcpy not installed — mirroring tools won't work, but adb tools will."
         return
     fi
@@ -157,16 +146,24 @@ ensure_scrcpy() {
     local tarball="scrcpy-${os_arch}-${tag}.tar.gz"
     local url="https://github.com/Genymobile/scrcpy/releases/download/${tag}/${tarball}"
 
-    info "Downloading scrcpy ${tag}..."
+    info "Downloading scrcpy ${tag} (includes adb)..."
     local tmp_tar="/tmp/scrcpy-$$.tar.gz"
     curl -fsSL -o "$tmp_tar" "$url"
     sudo mkdir -p /opt/scrcpy
     sudo tar xzf "$tmp_tar" -C /opt/scrcpy --strip-components=1
     rm -f "$tmp_tar"
-    sudo ln -sf /opt/scrcpy/scrcpy /usr/local/bin/scrcpy
 
-    command -v scrcpy &>/dev/null || fail "scrcpy still not found after install"
-    ok "scrcpy installed: $(command -v scrcpy) (${tag})"
+    # Symlink whichever binaries were missing
+    if $need_scrcpy; then
+        sudo ln -sf /opt/scrcpy/scrcpy /usr/local/bin/scrcpy
+        command -v scrcpy &>/dev/null || fail "scrcpy still not found after install"
+        ok "scrcpy installed: /usr/local/bin/scrcpy (${tag})"
+    fi
+    if $need_adb; then
+        sudo ln -sf /opt/scrcpy/adb /usr/local/bin/adb
+        command -v adb &>/dev/null || fail "adb still not found after install"
+        ok "adb installed: /usr/local/bin/adb (bundled with scrcpy ${tag})"
+    fi
 }
 
 # ── Find Python 3.10+ ─────────────────────────────────────────────────────
@@ -416,8 +413,7 @@ main() {
 
     detect_platform
     ensure_repo
-    ensure_adb
-    ensure_scrcpy
+    ensure_scrcpy_and_adb
     find_python
     ensure_uv
     install_deps
