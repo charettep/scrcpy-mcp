@@ -429,19 +429,25 @@ setup_android_device() {
     echo ""
 
     # ── Poll for device connection ────────────────────────────────────────
+    # adb devices output format (skip first header line):
+    #   List of devices attached
+    #   SERIAL\tdevice
+    #   SERIAL\tunauthorized
+    #   SERIAL\tno permissions (...)
     info "Waiting for device to appear on USB..."
     local device_line="" serial="" state="" attempts=0 max_attempts=60
 
     while [ $attempts -lt $max_attempts ]; do
-        device_line="$(adb devices 2>/dev/null | grep -E '\s(device|unauthorized|no permissions)' | head -1)"
+        # Skip the "List of devices attached" header, then look for actual device lines
+        device_line="$(adb devices 2>/dev/null | tail -n +2 | grep -E '^\S+\s' | head -1)"
         if [ -n "$device_line" ]; then
             serial="$(echo "$device_line" | awk '{print $1}')"
-            state="$(echo "$device_line" | awk '{print $2}')"
+            # State may be multi-word ("no permissions ..."), grab everything after serial
+            state="$(echo "$device_line" | sed "s/^${serial}[[:space:]]*//")"
             break
         fi
         sleep 2
         attempts=$((attempts + 1))
-        # Print a dot every 10 seconds so user knows we're still waiting
         if [ $((attempts % 5)) -eq 0 ]; then
             echo -ne "  ... still waiting (${attempts}/${max_attempts})\r"
         fi
@@ -455,62 +461,42 @@ setup_android_device() {
 
     ok "Device detected: $serial (state: $state)"
 
-    # ── Wait for authorization if needed ──────────────────────────────────
-    if [ "$state" = "unauthorized" ] || [ "$state" = "no" ]; then
-        echo ""
-        info "Device is connected but not authorized."
-        info "Accept the RSA fingerprint prompt on your phone now..."
-        echo ""
-
-        attempts=0
-        while [ $attempts -lt 30 ]; do
-            state="$(adb devices 2>/dev/null | grep "$serial" | awk '{print $2}')"
-            if [ "$state" = "device" ]; then
-                break
-            fi
-            sleep 2
-            attempts=$((attempts + 1))
-        done
-
-        if [ "$state" != "device" ]; then
-            warn "Device still unauthorized after 60s. Skipping udev rule."
-            info "Accept the RSA prompt and run: adb devices"
-            return
-        fi
-        ok "Device authorized!"
-    fi
-
-    # ── Auto-detect USB vendor ID and write udev rule ─────────────────────
+    # ── Auto-detect USB vendor ID via lsusb + adb usb port ────────────────
+    # We detect vendor ID BEFORE waiting for authorization because the device
+    # may be in "no permissions" state where adb shell doesn't work, but
+    # lsusb can still see the USB device.
     info "Detecting USB vendor ID..."
     local vendor_id=""
 
-    # Try to get vendor ID from adb usb device path
-    # lsusb lists all USB devices; we look for known Android vendor IDs
-    # or match the device serial against usb-devices output
     if command -v lsusb &>/dev/null; then
-        # Get the device's USB vendor ID via adb and cross-reference with lsusb
-        # adb devices -l shows transport_id; we can also use getprop
-        local usb_vid
-        usb_vid="$(adb -s "$serial" shell getprop ro.boot.usb.vid 2>/dev/null | tr -d '[:space:]')"
+        # adb devices -l shows usb port like "usb:3-2" — extract bus and device
+        local usb_port
+        usb_port="$(adb devices -l 2>/dev/null | grep "$serial" | grep -oP 'usb:\K[0-9-]+' || true)"
 
-        if [ -z "$usb_vid" ] || [ "$usb_vid" = "" ]; then
-            # Fallback: scan lsusb for known Android vendors or recently added devices
-            # Get manufacturer from device, match against lsusb
+        if [ -n "$usb_port" ]; then
+            # usb_port is like "3-2" — bus is the first number
+            local bus_num="${usb_port%%-*}"
+            # lsusb shows "Bus 003 Device 042: ID 18d1:4ee7 Google Inc. ..."
+            # Match on bus number and find device with matching port
+            # Use lsusb -t (tree) to find device number from port, or just match bus
+            local bus_padded
+            bus_padded="$(printf '%03d' "$bus_num")"
+            # Get all devices on this bus, exclude hubs
+            vendor_id="$(lsusb | grep "Bus ${bus_padded}" | grep -v '1d6b:' | grep -v -i 'hub' | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
+        fi
+
+        # Fallback: if adb shell works, try manufacturer match
+        if [ -z "$vendor_id" ]; then
             local manufacturer
-            manufacturer="$(adb -s "$serial" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-
+            manufacturer="$(adb -s "$serial" shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')"
             if [ -n "$manufacturer" ]; then
                 vendor_id="$(lsusb | grep -i "$manufacturer" | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
             fi
-        else
-            vendor_id="$usb_vid"
         fi
 
-        # Last resort: show lsusb and let the user see what we picked
+        # Last resort: first non-hub USB device
         if [ -z "$vendor_id" ]; then
-            # Parse all lsusb vendor IDs and exclude common non-Android ones (hubs, etc.)
-            # Pick the first one that's not a Linux Foundation hub (1d6b)
-            vendor_id="$(lsusb | grep -v '1d6b:' | grep -v 'Hub' | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
+            vendor_id="$(lsusb | grep -v '1d6b:' | grep -v -i 'hub' | head -1 | grep -oP 'ID \K[0-9a-f]{4}' || true)"
         fi
     fi
 
@@ -523,7 +509,7 @@ setup_android_device() {
 
     ok "USB vendor ID: $vendor_id"
 
-    # Check if rule already exists
+    # ── Write udev rule ───────────────────────────────────────────────────
     if grep -qs "idVendor.*$vendor_id" /etc/udev/rules.d/51-android.rules 2>/dev/null; then
         ok "udev rule for vendor $vendor_id already exists"
     else
@@ -536,15 +522,53 @@ UDEVEOF
         ok "udev rule written to /etc/udev/rules.d/51-android.rules"
     fi
 
-    # Restart adb to pick up new permissions
+    # Restart adb to pick up new udev permissions
     info "Restarting adb server..."
     adb kill-server
+    sleep 1
     adb start-server
+
+    # ── Wait for device to become authorized ──────────────────────────────
+    # After udev rule + adb restart, device should go from "no permissions"
+    # to either "device" (already authorized) or "unauthorized" (needs RSA prompt)
+    info "Waiting for device authorization..."
+    state=""
+    attempts=0
+    while [ $attempts -lt 30 ]; do
+        device_line="$(adb devices 2>/dev/null | tail -n +2 | grep "^${serial}" | head -1)"
+        if [ -n "$device_line" ]; then
+            state="$(echo "$device_line" | sed "s/^${serial}[[:space:]]*//")"
+            case "$state" in
+                device) break ;;
+                unauthorized*)
+                    if [ $attempts -eq 0 ]; then
+                        echo ""
+                        info "Device is connected but not yet authorized."
+                        info "Check your phone — accept the RSA fingerprint prompt now..."
+                        echo ""
+                    fi
+                    ;;
+            esac
+        fi
+        sleep 2
+        attempts=$((attempts + 1))
+        if [ $((attempts % 5)) -eq 0 ]; then
+            echo -ne "  ... waiting for authorization (${attempts}/30)\r"
+        fi
+    done
+
     echo ""
-    info "Connected devices:"
-    adb devices -l
-    echo ""
-    ok "Android device setup complete!"
+    if [ "$state" = "device" ]; then
+        ok "Device authorized!"
+        echo ""
+        info "Connected devices:"
+        adb devices -l
+        echo ""
+        ok "Android device setup complete!"
+    else
+        warn "Device not fully authorized after 60s (state: $state)"
+        info "Accept the RSA prompt on your phone and run: adb devices -l"
+    fi
 }
 
 # ── Generate .env ─────────────────────────────────────────────────────────
