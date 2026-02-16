@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # install.sh — One-click installer for scrcpy-mcp
-# Detects OS, installs dependencies, finds Python 3.10+, detects MCP clients,
-# and wires config into Claude Code and/or Codex CLI.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/charettep/scrcpy-mcp/main/install.sh | bash
+#   # — or from a local clone —
+#   ./install.sh
+#
+# Detects OS, installs system dependencies (adb, scrcpy), finds Python 3.10+,
+# clones the repo if needed, installs pip deps, detects MCP clients (Claude Code,
+# Codex CLI), and wires config into the chosen scope (global or project-local).
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL="https://github.com/charettep/scrcpy-mcp.git"
+DEFAULT_INSTALL_DIR="$HOME/.local/share/scrcpy-mcp"
 
 # ── Colors ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -12,6 +20,18 @@ info()  { echo -e "${BLUE}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
+
+# ── TTY-safe read (works when piped from curl) ────────────────────────────
+# When running via `curl | bash`, stdin is the script itself.
+# All interactive reads must come from /dev/tty instead.
+prompt() {
+    local varname="$1" message="$2"
+    if [ -t 0 ]; then
+        read -rp "$message" "$varname"
+    else
+        read -rp "$message" "$varname" </dev/tty
+    fi
+}
 
 # ── Detect platform ────────────────────────────────────────────────────────
 detect_platform() {
@@ -44,7 +64,8 @@ ask_install() {
     local pkg="$1" mgr="$2"
     echo ""
     warn "$pkg is not installed."
-    read -rp "  Install $pkg via $mgr? [y/N] " ans
+    local ans=""
+    prompt ans "  Install $pkg via $mgr? [y/N] "
     case "$ans" in
         [yY]|[yY][eE][sS]) return 0 ;;
         *) return 1 ;;
@@ -59,6 +80,21 @@ do_install() {
         pacman) sudo pacman -S --noconfirm "$pkg" ;;
         brew)   brew install "$pkg" ;;
     esac
+}
+
+# ── Check / install git ──────────────────────────────────────────────────
+ensure_git() {
+    if command -v git &>/dev/null; then
+        return
+    fi
+    local pkg="git"
+    if ask_install "git" "$PLATFORM ($pkg)"; then
+        do_install "$pkg"
+        command -v git &>/dev/null || fail "git still not found after install"
+        ok "git installed: $(command -v git)"
+    else
+        fail "git is required to download scrcpy-mcp. Install it manually and re-run."
+    fi
 }
 
 # ── Check / install adb ───────────────────────────────────────────────────
@@ -128,10 +164,39 @@ find_python() {
     fail "Python 3.10+ is required but not found. Install it and re-run."
 }
 
+# ── Ensure repo is available locally ──────────────────────────────────────
+# Detects if running from a clone (scrcpy_mcp.py exists next to us) or from
+# a curl pipe (no local files). Clones the repo if needed.
+ensure_repo() {
+    # Case 1: running from an existing clone — BASH_SOURCE is valid
+    if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "bash" ]; then
+        local script_dir
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [ -f "$script_dir/scrcpy_mcp.py" ] && [ -f "$script_dir/requirements.txt" ]; then
+            INSTALL_DIR="$script_dir"
+            ok "Running from local clone: $INSTALL_DIR"
+            return
+        fi
+    fi
+
+    # Case 2: piped from curl — clone the repo
+    info "Downloading scrcpy-mcp..."
+    ensure_git
+    if [ -d "$DEFAULT_INSTALL_DIR/.git" ]; then
+        info "Existing install found at $DEFAULT_INSTALL_DIR, updating..."
+        git -C "$DEFAULT_INSTALL_DIR" pull --quiet
+    else
+        mkdir -p "$(dirname "$DEFAULT_INSTALL_DIR")"
+        git clone --quiet "$REPO_URL" "$DEFAULT_INSTALL_DIR"
+    fi
+    INSTALL_DIR="$DEFAULT_INSTALL_DIR"
+    ok "Repository ready: $INSTALL_DIR"
+}
+
 # ── Install pip dependencies ───────────────────────────────────────────────
 install_pip_deps() {
     info "Installing Python dependencies..."
-    "$PYTHON_PATH" -m pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
+    "$PYTHON_PATH" -m pip install --quiet -r "$INSTALL_DIR/requirements.txt"
     ok "pip dependencies installed"
 }
 
@@ -172,7 +237,8 @@ ask_scope() {
     if $HAS_CODEX;  then echo "        ~/.codex/config.toml (Codex CLI)"; fi
     echo "  (p) Project — generate .mcp.json in this directory only"
     echo ""
-    read -rp "  Scope [g/p]: " scope_ans
+    local scope_ans=""
+    prompt scope_ans "  Scope [g/p]: "
     case "$scope_ans" in
         [gG]) INSTALL_SCOPE="global" ;;
         *)    INSTALL_SCOPE="project" ;;
@@ -187,13 +253,13 @@ resolve_paths() {
 
 # ── Generate project-local .mcp.json ─────────────────────────────────────
 generate_mcp_json() {
-    local mcp_file="$SCRIPT_DIR/.mcp.json"
+    local mcp_file="$INSTALL_DIR/.mcp.json"
     cat > "$mcp_file" <<MCPEOF
 {
   "mcpServers": {
     "scrcpy": {
       "command": "$PYTHON_PATH",
-      "args": ["$SCRIPT_DIR/scrcpy_mcp.py"],
+      "args": ["$INSTALL_DIR/scrcpy_mcp.py"],
       "env": {
         "SCRCPY_MCP_ADB_PATH": "$ADB_PATH",
         "SCRCPY_MCP_SCRCPY_PATH": "$SCRCPY_PATH"
@@ -210,7 +276,7 @@ inject_claude_code() {
     local claude_json="$HOME/.claude.json"
 
     # Pass values via sys.argv to avoid shell quoting issues in inline Python
-    "$PYTHON_PATH" - "$claude_json" "$PYTHON_PATH" "$SCRIPT_DIR/scrcpy_mcp.py" "$ADB_PATH" "$SCRCPY_PATH" <<'PYEOF'
+    "$PYTHON_PATH" - "$claude_json" "$PYTHON_PATH" "$INSTALL_DIR/scrcpy_mcp.py" "$ADB_PATH" "$SCRCPY_PATH" <<'PYEOF'
 import json, sys
 
 config_path, py_path, script_path, adb_path, scrcpy_path = sys.argv[1:6]
@@ -274,7 +340,7 @@ PYEOF
 
 [mcp_servers.scrcpy]
 command = "$PYTHON_PATH"
-args = ["$SCRIPT_DIR/scrcpy_mcp.py"]
+args = ["$INSTALL_DIR/scrcpy_mcp.py"]
 
 [mcp_servers.scrcpy.env]
 SCRCPY_MCP_ADB_PATH = "$ADB_PATH"
@@ -285,7 +351,7 @@ TOMLEOF
 
 # ── Generate .env ─────────────────────────────────────────────────────────
 generate_env() {
-    local env_file="$SCRIPT_DIR/.env"
+    local env_file="$INSTALL_DIR/.env"
     cat > "$env_file" <<ENVEOF
 # Generated by install.sh — absolute paths for scrcpy-mcp
 SCRCPY_MCP_ADB_PATH=$ADB_PATH
@@ -303,6 +369,7 @@ main() {
     echo ""
 
     detect_platform
+    ensure_repo
     ensure_adb
     ensure_scrcpy
     find_python
@@ -326,11 +393,12 @@ main() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     ok "Installation complete!"
     echo ""
+    info "Installed to: $INSTALL_DIR"
     if [ "$INSTALL_SCOPE" = "global" ]; then
         info "scrcpy MCP server registered globally."
         info "Restart Claude Code / Codex to pick up the new server."
     else
-        info "Generated .mcp.json in $SCRIPT_DIR"
+        info "Generated .mcp.json in $INSTALL_DIR"
         info "Copy it to your project or ~/.claude.json for wider access."
     fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

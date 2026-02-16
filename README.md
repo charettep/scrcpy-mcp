@@ -4,19 +4,30 @@ Local MCP server that exposes Android device control via `adb` and `scrcpy` as 2
 
 ## Quick Start
 
+One command — no prerequisites needed (the installer handles everything):
+
 ```bash
-git clone <repo-url> && cd scrcpy/mcp
+curl -fsSL https://raw.githubusercontent.com/charettep/scrcpy-mcp/main/install.sh | bash
+```
+
+Or from a local clone:
+
+```bash
+git clone https://github.com/charettep/scrcpy-mcp.git && cd scrcpy-mcp
 ./install.sh
 ```
 
 The installer will:
 1. Detect your OS and package manager (apt, dnf, pacman, brew)
-2. Check for `adb` and `scrcpy` — offer to install if missing (prompts before sudo)
-3. Find Python 3.10+ and install pip dependencies
-4. Detect installed MCP clients (Claude Code, Codex CLI)
-5. Ask where to register the server:
+2. Download the repo to `~/.local/share/scrcpy-mcp` (if running via curl)
+3. Check for `adb` and `scrcpy` — offer to install if missing (prompts before sudo)
+4. Find Python 3.10+ and install pip dependencies
+5. Detect installed MCP clients (Claude Code, Codex CLI)
+6. Ask where to register the server:
    - **Global** — injects config directly into `~/.claude.json` and/or `~/.codex/config.toml`
    - **Project** — generates a local `.mcp.json` file
+
+Re-running the installer is safe — it updates the existing install and overwrites old config entries.
 
 ## Prerequisites
 
