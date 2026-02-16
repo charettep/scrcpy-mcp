@@ -36,7 +36,7 @@ python3.10 -c "from scrcpy_mcp import mcp; print(len(mcp._tool_manager._tools))"
 
 **Key conventions**:
 - Tools are async functions decorated with `@mcp.tool`
-- Tool names are prefixed with `scrcpy_` for MCP namespace clarity
+- Tool names are unprefixed (e.g. `tap`, `screenshot`) — the MCP server name `scrcpy` already provides namespace
 - `_adb_ok()` raises `RuntimeError` on non-zero exit — tools surface these as error messages to the client
 - scrcpy sessions use SIGTERM with SIGKILL fallback after 5s timeout
 - Screenshot uses `adb exec-out screencap -p` piped directly to local file (no temp file on device)

@@ -12,7 +12,7 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/charettep/scrcpy-mcp.git"
-DEFAULT_INSTALL_DIR="$HOME/.local/share/scrcpy-mcp"
+DEFAULT_INSTALL_DIR="$HOME/mcp/scrcpy-mcp"
 
 # ── Colors ──────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -193,27 +193,34 @@ ensure_repo() {
     ok "Repository ready: $INSTALL_DIR"
 }
 
+# ── Check / install uv ────────────────────────────────────────────────────
+ensure_uv() {
+    if command -v uv &>/dev/null; then
+        ok "uv found: $(command -v uv)"
+        return
+    fi
+    info "Installing uv (Python package manager)..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    # Add uv to PATH for this session (installer puts it in ~/.local/bin)
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    command -v uv &>/dev/null || fail "uv still not found after install"
+    ok "uv installed: $(command -v uv)"
+}
+
 # ── Create venv and install dependencies ──────────────────────────────────
-# Uses uv if available (fast, handles PEP 668), falls back to stdlib venv + pip.
+# Uses uv to create an isolated venv and install deps.
 # After this, PYTHON_PATH points to the venv's python.
 install_deps() {
     local venv_dir="$INSTALL_DIR/.venv"
 
-    if command -v uv &>/dev/null; then
-        info "Creating venv with uv..."
-        uv venv --quiet --python "$PYTHON_PATH" "$venv_dir"
-        info "Installing Python dependencies with uv..."
-        uv pip install --quiet --python "$venv_dir/bin/python" -r "$INSTALL_DIR/requirements.txt"
-    else
-        info "Creating venv..."
-        "$PYTHON_PATH" -m venv "$venv_dir"
-        info "Installing Python dependencies..."
-        "$venv_dir/bin/python" -m pip install --quiet -r "$INSTALL_DIR/requirements.txt"
-    fi
+    info "Creating venv with uv..."
+    uv venv --quiet --python "$PYTHON_PATH" "$venv_dir"
+    info "Installing Python dependencies..."
+    uv pip install --quiet --python "$venv_dir/bin/python" -r "$INSTALL_DIR/requirements.txt"
 
     # All config output uses the venv python so MCP clients launch with deps available
     PYTHON_PATH="$venv_dir/bin/python"
-    ok "venv ready: $venv_dir"
+    ok "Dependencies installed: $venv_dir"
 }
 
 # ── Detect MCP clients ────────────────────────────────────────────────────
@@ -389,6 +396,7 @@ main() {
     ensure_adb
     ensure_scrcpy
     find_python
+    ensure_uv
     install_deps
     resolve_paths
     generate_env

@@ -74,7 +74,7 @@ def _require_serial(serial: Optional[str]) -> Optional[str]:
 # ═══════════════════════════════════════════════════════════════════════════
 
 @mcp.tool
-async def scrcpy_list_devices() -> str:
+async def list_devices() -> str:
     """List connected Android devices with status and transport info.
 
     Returns the output of `adb devices -l` showing serial, state,
@@ -84,7 +84,7 @@ async def scrcpy_list_devices() -> str:
 
 
 @mcp.tool
-async def scrcpy_device_info(serial: Optional[str] = None) -> str:
+async def device_info(serial: Optional[str] = None) -> str:
     """Get detailed device information.
 
     Returns model name, Android version, SDK level, screen resolution,
@@ -133,7 +133,7 @@ async def scrcpy_device_info(serial: Optional[str] = None) -> str:
 
 
 @mcp.tool
-async def scrcpy_tcpip_connect(
+async def tcpip_connect(
     action: str = "connect",
     ip: str = "",
     port: int = 5555,
@@ -169,7 +169,7 @@ async def scrcpy_tcpip_connect(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @mcp.tool
-async def scrcpy_tap(
+async def tap(
     x: int,
     y: int,
     serial: Optional[str] = None,
@@ -186,7 +186,7 @@ async def scrcpy_tap(
 
 
 @mcp.tool
-async def scrcpy_swipe(
+async def swipe(
     x1: int,
     y1: int,
     x2: int,
@@ -213,7 +213,7 @@ async def scrcpy_swipe(
 
 
 @mcp.tool
-async def scrcpy_key_event(
+async def key_event(
     key: str,
     serial: Optional[str] = None,
 ) -> str:
@@ -238,7 +238,7 @@ async def scrcpy_key_event(
 
 
 @mcp.tool
-async def scrcpy_input_text(
+async def input_text(
     text: str,
     serial: Optional[str] = None,
 ) -> str:
@@ -257,7 +257,7 @@ async def scrcpy_input_text(
 
 
 @mcp.tool
-async def scrcpy_long_press(
+async def long_press(
     x: int,
     y: int,
     duration_ms: int = 1000,
@@ -284,19 +284,19 @@ async def scrcpy_long_press(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @mcp.tool
-async def scrcpy_screenshot(
+async def screenshot(
     output_path: str = "",
     serial: Optional[str] = None,
 ) -> str:
     """Capture a screenshot and save it locally.
 
     Args:
-        output_path: Local path to save the PNG (default: /tmp/scrcpy_screenshot_<ts>.png).
+        output_path: Local path to save the PNG (default: /tmp/screenshot_<ts>.png).
         serial: Device serial (optional).
     """
     serial = _require_serial(serial)
     if not output_path:
-        output_path = f"/tmp/scrcpy_screenshot_{int(time.time())}.png"
+        output_path = f"/tmp/screenshot_{int(time.time())}.png"
     output_path = os.path.expanduser(output_path)
 
     cmd = [ADB]
@@ -318,7 +318,7 @@ async def scrcpy_screenshot(
 
 
 @mcp.tool
-async def scrcpy_screen_power(
+async def screen_power(
     action: str = "toggle",
     serial: Optional[str] = None,
 ) -> str:
@@ -343,7 +343,7 @@ async def scrcpy_screen_power(
 
 
 @mcp.tool
-async def scrcpy_rotation(
+async def rotation(
     set_to: Optional[int] = None,
     serial: Optional[str] = None,
 ) -> str:
@@ -372,7 +372,7 @@ async def scrcpy_rotation(
 
 
 @mcp.tool
-async def scrcpy_screen_record(
+async def screen_record(
     output_path: str = "",
     duration: int = 30,
     serial: Optional[str] = None,
@@ -417,7 +417,7 @@ async def scrcpy_screen_record(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @mcp.tool
-async def scrcpy_list_apps(
+async def list_apps(
     filter: str = "",
     third_party_only: bool = True,
     serial: Optional[str] = None,
@@ -441,7 +441,7 @@ async def scrcpy_list_apps(
 
 
 @mcp.tool
-async def scrcpy_start_app(
+async def start_app(
     package: str,
     activity: str = "",
     serial: Optional[str] = None,
@@ -466,7 +466,7 @@ async def scrcpy_start_app(
 
 
 @mcp.tool
-async def scrcpy_stop_app(
+async def stop_app(
     package: str,
     serial: Optional[str] = None,
 ) -> str:
@@ -481,7 +481,7 @@ async def scrcpy_stop_app(
 
 
 @mcp.tool
-async def scrcpy_install_apk(
+async def install_apk(
     apk_path: str,
     serial: Optional[str] = None,
 ) -> str:
@@ -503,7 +503,7 @@ async def scrcpy_install_apk(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @mcp.tool
-async def scrcpy_get_clipboard(serial: Optional[str] = None) -> str:
+async def get_clipboard(serial: Optional[str] = None) -> str:
     """Read the device clipboard content.
 
     Note: Requires Android 10+ or a running scrcpy session for full support.
@@ -521,7 +521,7 @@ async def scrcpy_get_clipboard(serial: Optional[str] = None) -> str:
 
 
 @mcp.tool
-async def scrcpy_set_clipboard(
+async def set_clipboard(
     text: str,
     serial: Optional[str] = None,
 ) -> str:
@@ -542,7 +542,7 @@ async def scrcpy_set_clipboard(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @mcp.tool
-async def scrcpy_push_file(
+async def push_file(
     local_path: str,
     remote_path: str,
     serial: Optional[str] = None,
@@ -562,7 +562,7 @@ async def scrcpy_push_file(
 
 
 @mcp.tool
-async def scrcpy_pull_file(
+async def pull_file(
     remote_path: str,
     local_path: str = "",
     serial: Optional[str] = None,
@@ -587,7 +587,7 @@ async def scrcpy_pull_file(
 # ═══════════════════════════════════════════════════════════════════════════
 
 @mcp.tool
-async def scrcpy_start_mirror(
+async def start_mirror(
     serial: Optional[str] = None,
     max_size: int = 0,
     video_bit_rate: str = "8M",
@@ -743,12 +743,12 @@ async def scrcpy_start_mirror(
     return (
         f"scrcpy session started (PID {proc.pid})\n"
         f"Command: {' '.join(cmd)}\n"
-        f"Use scrcpy_stop_session(pid={proc.pid}) to stop."
+        f"Use stop_session(pid={proc.pid}) to stop."
     )
 
 
 @mcp.tool
-async def scrcpy_stop_session(pid: int = 0) -> str:
+async def stop_session(pid: int = 0) -> str:
     """Stop a running scrcpy session.
 
     Args:
